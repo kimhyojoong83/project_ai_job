@@ -1,5 +1,5 @@
-25-10-20 주세 선정 및 데이터 시각화, 전처리
-columns :['job_id' 'company_name', 'industry', 'job_title', 'skills_required', 'experience_level', 'employment_type', 'location', 'salary_range_usd', 'posted_date', 'company_size', 'tools_preferred']
+25-10-20 주제 선정 및 데이터 시각화, 전처리
+columns : ['job_id' 'company_name', 'industry', 'job_title', 'skills_required', 'experience_level', 'employment_type', 'location', 'salary_range_usd', 'posted_date', 'company_size', 'tools_preferred']
 use_cols = ['industry', 'job_title', 'skills_required', 'experience_level', 'employment_type', 'location', 'salary_range_usd', 'posted_date', 'company_size', 'tools_preferred']
 
 experience_level(경력 여부)
