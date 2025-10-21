@@ -1,0 +1,170 @@
+# =====================================================
+# ✅ [1] 라이브러리 불러오기
+# =====================================================
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+import matplotlib.font_manager as fm
+import os
+import re
+
+# =====================================================
+# ✅ [2] 데이터 불러오기 및 전처리
+# =====================================================
+df = pd.read_csv("ai_job_market.csv")
+
+# 🔹 location에서 국가 코드만 추출 (예: "Tracybury, AR" → "AR")
+df['location'] = df['location'].astype(str).apply(lambda x: x.split(',')[-1].strip() if ',' in x else x.strip())
+
+# 🔹 salary_range_usd에서 앞 숫자만 추출 (예: "92860-109598" → 92860)
+def extract_min_salary(s):
+    if pd.isna(s):
+        return None
+    match = re.match(r'(\d+)', str(s))
+    return int(match.group(1)) if match else None
+
+df['salary_range_usd'] = df['salary_range_usd'].apply(extract_min_salary)
+
+# =====================================================
+# ✅ [3] 국가별 평균 연봉 계산 및 KMeans 클러스터링
+# =====================================================
+country_salary = df.groupby('location')['salary_range_usd'].mean().reset_index()
+country_salary.columns = ['country', 'avg_salary']
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(country_salary[['avg_salary']])
+kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+country_salary['cluster'] = kmeans.fit_predict(X_scaled)
+
+# 클러스터별 평균 연봉 계산
+cluster_mean = country_salary.groupby('cluster')['avg_salary'].mean().reset_index()
+cluster_mean = cluster_mean.sort_values('avg_salary', ascending=False).reset_index(drop=True)
+cluster_mean['group'] = ['High Salary', 'Mid Salary', 'Low Salary']
+
+# 클러스터 → 그룹 매핑
+cluster_to_group = dict(zip(cluster_mean['cluster'], cluster_mean['group']))
+country_salary['salary_group'] = country_salary['cluster'].map(cluster_to_group)
+
+# =====================================================
+# ✅ [4] KR 누락 시 강제 추가
+# =====================================================
+if 'KR' not in country_salary['country'].values:
+    kr_avg = df['salary_range_usd'].mean()
+    kr_row = pd.DataFrame([{'country': 'KR', 'avg_salary': kr_avg, 'salary_group': 'Mid Salary'}])
+    country_salary = pd.concat([country_salary, kr_row], ignore_index=True)
+
+# =====================================================
+# ✅ [5] 각 그룹별 대표 5개 국가 (KR 포함)
+# =====================================================
+representatives = {}
+for group in ['High Salary', 'Mid Salary', 'Low Salary']:
+    subset = country_salary[country_salary['salary_group'] == group]
+    if subset.empty:
+        continue
+
+    if group == 'Low Salary':
+        reps = subset.sort_values('avg_salary', ascending=True).head(5)
+    else:
+        reps = subset.sort_values('avg_salary', ascending=False).head(5)
+
+    # KR 포함 보장
+    if group == 'Mid Salary' and 'KR' not in reps['country'].values:
+        kr_row = subset[subset['country'] == 'KR']
+        reps = pd.concat([reps, kr_row]).drop_duplicates('country').head(5)
+
+    representatives[group] = reps['country'].tolist()
+
+print("\n📌 대표 5개 국가 (KR 포함):")
+for group, countries in representatives.items():
+    print(f"{group}: {countries}")
+
+# =====================================================
+# ✅ [6] 각 그룹별 대표 기술(skill) 2개 추출
+# =====================================================
+skill_summary = {}
+
+if 'skills_required' in df.columns:
+    df['skills_required'] = df['skills_required'].fillna("")
+    df_expanded = df.assign(skill=df['skills_required'].str.split(',')).explode('skill')
+    df_expanded['skill'] = df_expanded['skill'].str.strip()
+
+    for group in ['High Salary', 'Mid Salary', 'Low Salary']:
+        group_countries = country_salary[country_salary['salary_group'] == group]['country']
+        group_df = df_expanded[df_expanded['location'].isin(group_countries)]
+        top_skills = (
+            group_df['skill']
+            .value_counts()
+            .head(2)
+            .index
+            .tolist()
+        )
+        skill_summary[group] = ", ".join(top_skills)
+else:
+    skill_summary = {g: "N/A" for g in ['High Salary', 'Mid Salary', 'Low Salary']}
+
+print("\n💡 대표 기술 상위 2개:")
+for group, skills in skill_summary.items():
+    print(f"{group}: {skills}")
+
+# =====================================================
+# ✅ [7] 시각화
+# =====================================================
+plt.figure(figsize=(9, 7))
+bar_colors = ['#5e3c99', '#1b7837', '#fdb863']
+
+sns.barplot(
+    x='group',
+    y='avg_salary',
+    data=cluster_mean,
+    palette=bar_colors
+)
+
+plt.title("고·중·저 나라별 평균 연봉 비교 (KR + 대표 기술 포함)", fontsize=16, pad=20)
+plt.xlabel("나라별 급여 그룹", fontsize=12)
+plt.ylabel("평균 연봉 (USD)", fontsize=12)
+
+# -----------------------------
+# 상단에 대표 국가 표시
+# -----------------------------
+for i, row in cluster_mean.iterrows():
+    group = row['group']
+    reps = ", ".join(representatives.get(group, []))
+    plt.text(
+        i, row['avg_salary'] + (row['avg_salary'] * 0.02),
+        f"{group}: {reps}",
+        ha='center', fontsize=9, color='black'
+    )
+
+# -----------------------------
+# 중앙에 KR 강조 (Mid Salary)
+# -----------------------------
+mid_row = cluster_mean[cluster_mean['group'] == 'Mid Salary']
+if not mid_row.empty:
+    i = mid_row.index[0]
+    y = mid_row['avg_salary'].values[0]
+    plt.text(
+        i, y / 2,
+        "KR",
+        ha='center', va='center',
+        fontsize=14, fontweight='bold', color='white',
+        bbox=dict(facecolor='#1b7837', alpha=0.8, boxstyle='round,pad=0.4')
+    )
+
+# -----------------------------
+# ✅ 막대 내부 하단에 대표 기술 표시 (글씨 흰색)
+# -----------------------------
+for i, row in cluster_mean.iterrows():
+    group = row['group']
+    skills = skill_summary.get(group, "")
+    y = row['avg_salary'] * 0.1   # 막대 내부 하단 (10% 위치)
+    plt.text(
+        i, y,
+        f"Top Skills:\n{skills}",
+        ha='center', va='bottom',
+        fontsize=9, color='white', fontweight='bold'
+    )
+
+plt.tight_layout()
+plt.show()
